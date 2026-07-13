@@ -21,11 +21,11 @@ export const LIGHT_THEME: GraphTheme = {
 };
 
 export const DARK_THEME: GraphTheme = {
-  textPrimary: "#f9fafb",
-  textMuted: "#9ca3af",
+  textPrimary: "#ffffff",
+  textMuted: "rgba(255, 255, 255, 0.72)",
   accentSecondary: "#3fc7f9",
-  accentPrimary: "#a78bfa",
-  surfaceSecondary: "#1f2937",
+  accentPrimary: "#7a66f1",
+  surfaceSecondary: "#070313",
   warning: "#fbbf24",
   fileNode: "#60a5fa",
   crossRepo: "#f472b6",
