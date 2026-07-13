@@ -1,3 +1,6 @@
 node_modules/
 dist/
 public/graph.json
+.viewer-config.json
+graphify-out/
+.graphify/

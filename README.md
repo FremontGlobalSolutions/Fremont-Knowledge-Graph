@@ -1,84 +1,65 @@
 # Knowledge Graph Viewer
 
-Local standalone viewer for workspace knowledge graphs. Merges per-repo `graphify-out/graph.json` files into one combined graph and renders it with a 2D/3D force-graph stack.
+Local 2D/3D viewer for [Graphify](https://www.npmjs.com/package/@sentropic/graphify) knowledge graphs. Explore code structure, search symbols, and inspect node metadata in your browser.
 
-## Prerequisites
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Each repo must have a Graphify index at `<repo>/graphify-out/graph.json`. Refresh indexes from the agent platform:
+## Preview
 
-```powershell
-cd C:\src\agent-platform
-npm run build
-npm run graph:update:local -- -Workspace C:\src -AllRepos
-```
+| 2D | 3D |
+| --- | --- |
+| ![2D force graph](docs/assets/graph-2d.png) | ![3D force graph](docs/assets/graph-3d.png) |
+
+![2D and 3D mode toggle](docs/assets/graph-demo.gif)
 
 ## Quick start
 
-```powershell
-cd C:\src\knowledge-graph-viewer
+```bash
+git clone https://github.com/FremontGlobalSolutions/Fremont-Knowledge-Graph.git
+cd Fremont-Knowledge-Graph
 npm install
-npm run merge
 npm run dev
 ```
 
-The dev server opens at http://localhost:5199 and loads `public/graph.json`.
+Open **http://localhost:5199**.
 
-## Merge script
+1. **Manage Indexes** → set your **workspace root** (folder containing git repos)
+2. **Build Index** on repos you want to explore (requires [Graphify](https://www.npmjs.com/package/@sentropic/graphify) — `npx @sentropic/graphify update <repo>` works too)
+3. **Sidebar Repositories** → choose which indexed repos appear in the left pane, then **Save Sidebar**
+4. Select a repo → use **2D / 3D**, search, folder filter, and the node inspector
 
-Combine all repos under `C:\src` that have `graphify-out/graph.json`:
+### Local config
 
-```powershell
-npm run merge
+Copy `.viewer-config.example.json` to `.viewer-config.json` to persist workspace and sidebar settings:
+
+```json
+{
+  "workspaceRoot": "C:\\src",
+  "visibleRepos": ["my-app", "my-library"]
+}
 ```
 
-Options (via `node scripts/merge-graphs.mjs`):
+Only repos listed in `visibleRepos` show in the sidebar — indexed repos you omit stay hidden.
 
-| Flag | Description |
-|------|-------------|
-| `--workspace <path>` | Root folder to scan (default: `C:\src`) |
-| `--repos a,b,c` | Comma-separated repo folder names only |
-| `--out <path>` | Output file (default: `public/graph.json`) |
+## Features
 
-Example — merge two repos only:
+- **2D and 3D** force-graph rendering
+- **Workspace-aware** repo discovery and indexing from the UI
+- **Configurable sidebar** — show only the repos you care about
+- **Search and folder filters** on large graphs
+- **Node inspector** with neighbors and metadata
+- **Light / dark** theme
+- **Drag-and-drop** or file picker to load any Graphify `graph.json`
 
-```powershell
-node scripts/merge-graphs.mjs --repos agent-platform,crm-app
-```
+## Requirements
 
-The merge script:
-
-- Normalizes Graphify NetworkX node-link JSON (`nodes` + `links`)
-- Namespaces node ids as `RepoName::nodeId` to avoid collisions
-- Tags each node with a `repo` field for filtering/coloring
-- **Infers cross-repo links** by scanning TypeScript/JavaScript imports against workspace `package.json` names
-- Adds **repo hub** and **package entry** synthetic nodes for repos without a Graphify index
-- Adds **package.json dependency** edges between repo hubs
-- Writes `{ nodes, edges, metadata }` with per-repo and cross-repo stats
-
-Cross-repo edges appear as **dashed magenta/pink links** in the viewer. Solid links remain within-repo.
-
-### Cross-repo linking details
-
-| Link type | How it's inferred |
-|-----------|-------------------|
-| `cross_repo_import` | Source file imports a workspace package (e.g. `@workspace/locale-switcher`) → linked to the target file node or package entry node |
-| `cross_repo_depends` | `package.json` dependency on another workspace package → linked between repo hub nodes |
-
-Repos without `graphify-out/graph.json` still participate via the package registry (imports can target their package entry nodes). Run `graph:update:local` on those repos to get full file-level graphs.
-
-## Viewer features
-
-- **2D / 3D** force-graph rendering (`react-force-graph-2d` / `react-force-graph-3d`)
-- **Search** and **folder prefix** filters
-- **Repo legend** — click to hide/show repos; nodes colored by repo
-- **Node inspector** — click a node to see metadata and connections
-- **Drag-and-drop** or file picker to load any `graph.json` (single-repo Graphify export or merged file)
-- **Light / dark** theme toggle
+- Node.js 18+
+- Graphify for indexing (`graphify update` or `npx @sentropic/graphify update`)
+- Windows: bundled reindex script uses PowerShell (`scripts/update-graphify-graphs.ps1`)
 
 ## Production build
 
-```powershell
-npm run merge
+```bash
 npm run build
 npm run preview
 ```
@@ -86,8 +67,16 @@ npm run preview
 ## Troubleshooting
 
 | Issue | Fix |
-|-------|-----|
-| "No graph.json found" | Run `npm run merge` first |
-| Repo missing from merge | Ensure `<repo>/graphify-out/graph.json` exists; re-run `graph:update:local` |
-| Slow 3D with large graphs | Use 2D mode or filter by repo/folder first |
-| Node id collisions in single-repo view | Expected when viewing raw per-repo files; use merged output for workspace-wide view |
+| --- | --- |
+| Empty sidebar | Open **Manage Indexes** → check **Sidebar Repositories** → **Save Sidebar** |
+| Repo not listed | Confirm it is a folder under your workspace root |
+| No graph loaded | Build an index first (`graphify-out/graph.json` must exist) |
+| Slow 3D on large graphs | Use 2D mode or filter by folder first |
+
+## License
+
+[MIT](LICENSE) © Fremont Global Solutions
+
+## Built with AgentOps
+
+Developed alongside [Fremont AgentOps](https://fremontagentops.com) — agent-native tooling for understanding and operating on real codebases.

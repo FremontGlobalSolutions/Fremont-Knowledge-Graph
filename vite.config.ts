@@ -6,18 +6,43 @@ import { spawn } from "node:child_process";
 
 const CONFIG_FILE = path.join(process.cwd(), ".viewer-config.json");
 
-function getWorkspaceRoot(): string {
+interface ViewerConfig {
+  workspaceRoot: string;
+  /** Repo folder names shown in the sidebar. Empty = none until configured. */
+  visibleRepos: string[];
+}
+
+function readViewerConfig(): ViewerConfig {
+  const defaults: ViewerConfig = {
+    workspaceRoot: path.resolve(path.join(process.cwd(), "..")),
+    visibleRepos: [],
+  };
   try {
     if (fs.existsSync(CONFIG_FILE)) {
       const data = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
-      if (data.workspaceRoot) return data.workspaceRoot;
+      return {
+        workspaceRoot: data.workspaceRoot || defaults.workspaceRoot,
+        visibleRepos: Array.isArray(data.visibleRepos)
+          ? data.visibleRepos.filter((name: unknown) => typeof name === "string" && name.length > 0)
+          : defaults.visibleRepos,
+      };
     }
   } catch {}
-  return path.resolve(path.join(process.cwd(), ".."));
+  return defaults;
 }
 
-function saveWorkspaceRoot(rootPath: string): void {
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify({ workspaceRoot: rootPath }, null, 2), "utf8");
+function writeViewerConfig(partial: Partial<ViewerConfig>): ViewerConfig {
+  const current = readViewerConfig();
+  const next: ViewerConfig = {
+    workspaceRoot: partial.workspaceRoot ?? current.workspaceRoot,
+    visibleRepos: partial.visibleRepos ?? current.visibleRepos,
+  };
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2), "utf8");
+  return next;
+}
+
+function getWorkspaceRoot(): string {
+  return readViewerConfig().workspaceRoot;
 }
 
 interface RepoInfo {
@@ -125,19 +150,33 @@ function apiPlugin() {
 
           if (pathname === "/api/config") {
             if (req.method === "GET") {
-              const root = getWorkspaceRoot();
-              res.end(JSON.stringify({ workspaceRoot: root }));
+              const config = readViewerConfig();
+              res.end(JSON.stringify(config));
               return;
             }
             if (req.method === "POST") {
               const body = await getRequestBody(req);
-              if (body.workspaceRoot) {
-                saveWorkspaceRoot(body.workspaceRoot);
-                res.end(JSON.stringify({ success: true, workspaceRoot: body.workspaceRoot }));
-              } else {
-                res.statusCode = 400;
-                res.end(JSON.stringify({ error: "Missing workspaceRoot parameter" }));
+              const partial: Partial<ViewerConfig> = {};
+              if (typeof body.workspaceRoot === "string" && body.workspaceRoot.trim()) {
+                partial.workspaceRoot = body.workspaceRoot.trim();
               }
+              if (body.visibleRepos !== undefined) {
+                if (!Array.isArray(body.visibleRepos)) {
+                  res.statusCode = 400;
+                  res.end(JSON.stringify({ error: "visibleRepos must be an array" }));
+                  return;
+                }
+                partial.visibleRepos = body.visibleRepos.filter(
+                  (name: unknown) => typeof name === "string" && name.length > 0
+                );
+              }
+              if (Object.keys(partial).length === 0) {
+                res.statusCode = 400;
+                res.end(JSON.stringify({ error: "No config fields to update" }));
+                return;
+              }
+              const config = writeViewerConfig(partial);
+              res.end(JSON.stringify({ success: true, ...config }));
               return;
             }
           }

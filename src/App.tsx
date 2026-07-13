@@ -48,6 +48,8 @@ export function App() {
   // Workspace configuration & Repository states
   const [workspaceRoot, setWorkspaceRoot] = useState("");
   const [tempWorkspaceRoot, setTempWorkspaceRoot] = useState("");
+  const [visibleRepos, setVisibleRepos] = useState<string[]>([]);
+  const [tempVisibleRepos, setTempVisibleRepos] = useState<Set<string>>(new Set());
   const [repos, setRepos] = useState<RepoInfo[]>([]);
   const [selectedRepoName, setSelectedRepoName] = useState<string | null>(null);
   const [showManageIndexes, setShowManageIndexes] = useState(false);
@@ -59,6 +61,10 @@ export function App() {
 
   const stats = graph ? graphStats(graph) : null;
   const indexedRepos = useMemo(() => repos.filter((r) => r.hasGraph), [repos]);
+  const sidebarRepos = useMemo(() => {
+    const allowed = new Set(visibleRepos);
+    return indexedRepos.filter((r) => allowed.has(r.name));
+  }, [indexedRepos, visibleRepos]);
   const hiddenRepos = useMemo(() => new Set<string>(), []);
 
   // Fetch initial config & repositories list
@@ -67,7 +73,8 @@ export function App() {
       const res = await fetch("/api/config");
       if (res.ok) {
         const data = await res.json();
-        setWorkspaceRoot(data.workspaceRoot);
+        setWorkspaceRoot(data.workspaceRoot ?? "");
+        setVisibleRepos(Array.isArray(data.visibleRepos) ? data.visibleRepos : []);
       }
     } catch (e) {
       console.error("Failed to fetch config:", e);
@@ -112,18 +119,30 @@ export function App() {
     setTempWorkspaceRoot(workspaceRoot);
   }, [workspaceRoot]);
 
+  useEffect(() => {
+    setTempVisibleRepos(new Set(visibleRepos));
+  }, [visibleRepos]);
+
   // Clear selections whenever workspace configuration or repos list changes
   useEffect(() => {
     setSelectedFolders(new Set());
     setIndexingQueue([]);
   }, [workspaceRoot, repos]);
 
-  // Select the first indexed repository by default if nothing is selected
+  // Select the first sidebar repository by default if nothing is selected
   useEffect(() => {
-    if (!selectedRepoName && indexedRepos.length > 0) {
-      setSelectedRepoName(indexedRepos[0]!.name);
+    if (!selectedRepoName && sidebarRepos.length > 0) {
+      setSelectedRepoName(sidebarRepos[0]!.name);
+    } else if (
+      selectedRepoName &&
+      sidebarRepos.length > 0 &&
+      !sidebarRepos.some((r) => r.name === selectedRepoName)
+    ) {
+      setSelectedRepoName(sidebarRepos[0]!.name);
+    } else if (selectedRepoName && sidebarRepos.length === 0) {
+      setSelectedRepoName(null);
     }
-  }, [indexedRepos, selectedRepoName]);
+  }, [sidebarRepos, selectedRepoName]);
 
   // Load selected repository graph
   const loadGraph = useCallback(async (repoName: string) => {
@@ -274,6 +293,38 @@ export function App() {
     }
   }, [indexingQueue, activeJob]);
 
+  const handleToggleSidebarRepo = (repoName: string) => {
+    setTempVisibleRepos((prev) => {
+      const next = new Set(prev);
+      if (next.has(repoName)) {
+        next.delete(repoName);
+      } else {
+        next.add(repoName);
+      }
+      return next;
+    });
+  };
+
+  const handleSaveVisibleRepos = async () => {
+    try {
+      const res = await fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ visibleRepos: Array.from(tempVisibleRepos).sort() }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setVisibleRepos(Array.isArray(data.visibleRepos) ? data.visibleRepos : []);
+      }
+    } catch {
+      alert("Failed to save sidebar repositories");
+    }
+  };
+
+  const handleShowAllInSidebar = () => {
+    setTempVisibleRepos(new Set(indexedRepos.map((r) => r.name)));
+  };
+
   // Save workspace root path
   const handleSaveConfig = async () => {
     try {
@@ -350,23 +401,27 @@ export function App() {
           <aside className="sidebar">
             <div className="sidebar-section">
               <div className="sidebar-section-header">
-                <span className="sidebar-section-title">Repositories ({indexedRepos.length})</span>
+                <span className="sidebar-section-title">Repositories ({sidebarRepos.length})</span>
               </div>
 
-              {indexedRepos.length === 0 ? (
+              {sidebarRepos.length === 0 ? (
                 <div className="no-repos-box">
-                  <p className="no-repos-msg">No indexed repos found.</p>
+                  <p className="no-repos-msg">
+                    {indexedRepos.length === 0
+                      ? "No indexed repos found."
+                      : "No repositories selected for the sidebar."}
+                  </p>
                   <button
                     type="button"
                     className="btn-secondary btn-sm w-full"
                     onClick={() => setShowManageIndexes(true)}
                   >
-                    Index Repositories
+                    {indexedRepos.length === 0 ? "Index Repositories" : "Choose Sidebar Repos"}
                   </button>
                 </div>
               ) : (
                 <ul className="repo-list">
-                  {indexedRepos.map((repo) => {
+                  {sidebarRepos.map((repo) => {
                     const active = repo.name === selectedRepoName;
                     return (
                       <li key={repo.name}>
@@ -451,7 +506,7 @@ export function App() {
                   search={search}
                   folderFilter={folderFilter}
                   hiddenRepos={hiddenRepos}
-                  repos={indexedRepos.map((r) => r.name)}
+                  repos={sidebarRepos.map((r) => r.name)}
                   selectedNodeId={selectedNode?.id ?? null}
                   mode={mode}
                   isDark={isDark}
@@ -500,7 +555,56 @@ export function App() {
                     Save
                   </button>
                 </div>
-                <span className="config-hint">Repositories under this directory will be detected.</span>
+                <span className="config-hint">Repositories under this directory can be indexed and added to the sidebar.</span>
+              </div>
+
+              <div className="sidebar-config-section">
+                <div className="section-header-row">
+                  <h3 className="section-title">Sidebar Repositories</h3>
+                  <div className="batch-actions-row">
+                    <button
+                      type="button"
+                      className="btn-secondary btn-sm"
+                      onClick={handleShowAllInSidebar}
+                      disabled={activeJob?.status === "running"}
+                    >
+                      Show All Indexed
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-primary btn-sm"
+                      onClick={handleSaveVisibleRepos}
+                      disabled={activeJob?.status === "running"}
+                    >
+                      Save Sidebar ({tempVisibleRepos.size})
+                    </button>
+                  </div>
+                </div>
+                <p className="config-hint sidebar-config-hint">
+                  Choose which indexed repositories appear in the left pane. Unselected repos stay hidden even if indexed.
+                </p>
+                {indexedRepos.length === 0 ? (
+                  <p className="no-repos-msg">Index at least one repository to add it to the sidebar.</p>
+                ) : (
+                  <ul className="sidebar-picker-list">
+                    {indexedRepos.map((repo) => (
+                      <li key={repo.name} className="sidebar-picker-item">
+                        <label className="checkbox-label-all">
+                          <input
+                            type="checkbox"
+                            checked={tempVisibleRepos.has(repo.name)}
+                            onChange={() => handleToggleSidebarRepo(repo.name)}
+                            disabled={activeJob?.status === "running"}
+                          />
+                          <span>{repo.name}</span>
+                          <span className="repo-meta-status">
+                            {repo.nodeCount.toLocaleString()} nodes · {repo.edgeCount.toLocaleString()} edges
+                          </span>
+                        </label>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
 
               {activeJob && (
