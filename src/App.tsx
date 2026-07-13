@@ -1,27 +1,17 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { GraphCanvas } from "./GraphCanvas";
-import { parseGraphJson } from "./normalize-graphify";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import { NodeInspector } from "./NodeInspector";
 import { FullscreenCanvasFrame } from "./FullscreenCanvasFrame";
-import type { GraphRenderMode, KnowledgeGraphJson, KnowledgeGraphNode } from "./types";
+import { ErrorBoundary } from "./ErrorBoundary";
+import { ManageIndexesModal } from "./ManageIndexesModal";
+import { useWorkspaceConfig } from "./hooks/useWorkspaceConfig";
+import { useIndexingJob } from "./hooks/useIndexingJob";
+import type { GraphRenderMode, KnowledgeGraphJson, KnowledgeGraphNode, RepoInfo } from "./types";
 
-interface RepoInfo {
-  name: string;
-  path: string;
-  hasGraph: boolean;
-  isGit: boolean;
-  nodeCount: number;
-  edgeCount: number;
-  indexedAt: string | null;
-}
-
-interface IndexingJob {
-  repo: string;
-  status: "running" | "success" | "error";
-  startTime: string;
-  endTime?: string;
-  error?: string;
-}
+// Lazy-load GraphCanvas — it pulls in react-force-graph-2d (and
+// optionally 3D/three.js), which are the heaviest dependencies.
+const GraphCanvas = lazy(() =>
+  import("./GraphCanvas").then((m) => ({ default: m.GraphCanvas }))
+);
 
 function graphStats(graph: KnowledgeGraphJson) {
   const metadata = graph.metadata ?? {};
@@ -33,9 +23,9 @@ function graphStats(graph: KnowledgeGraphJson) {
 }
 
 export function App() {
+  // ── Graph display state ──────────────────────────────────────
   const [graph, setGraph] = useState<KnowledgeGraphJson | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
   const [loadingGraph, setLoadingGraph] = useState(false);
   const [search, setSearch] = useState("");
   const [folderFilter, setFolderFilter] = useState("");
@@ -48,49 +38,45 @@ export function App() {
     return window.matchMedia("(prefers-color-scheme: dark)").matches;
   });
 
+  // ── Repos state ──────────────────────────────────────────────
+  const [repos, setRepos] = useState<RepoInfo[]>([]);
+  const [selectedRepoName, setSelectedRepoName] = useState<string | null>(null);
+  const [showManageIndexes, setShowManageIndexes] = useState(false);
+
+  // ── Extracted hooks ──────────────────────────────────────────
+  const config = useWorkspaceConfig();
+  const indexingJob = useIndexingJob(
+    useCallback(
+      (repoName: string) => {
+        // Refresh repo list on successful index
+        void fetchRepos();
+        if (repoName === selectedRepoName) {
+          void loadGraph(repoName);
+        }
+      },
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      [selectedRepoName]
+    )
+  );
+
+  // ── Derived state ────────────────────────────────────────────
+  const stats = graph ? graphStats(graph) : null;
+  const indexedRepos = useMemo(() => repos.filter((r) => r.hasGraph), [repos]);
+  const sidebarRepos = useMemo(() => {
+    const allowed = new Set(config.visibleRepos);
+    return indexedRepos.filter((r) => allowed.has(r.name));
+  }, [indexedRepos, config.visibleRepos]);
+  const hiddenRepos = useMemo(() => new Set<string>(), []);
+
+  // ── Theme URL sync ───────────────────────────────────────────
   useEffect(() => {
     const url = new URL(window.location.href);
     url.searchParams.set("theme", isDark ? "dark" : "light");
     window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
   }, [isDark]);
 
-  // Workspace configuration & Repository states
-  const [workspaceRoot, setWorkspaceRoot] = useState("");
-  const [tempWorkspaceRoot, setTempWorkspaceRoot] = useState("");
-  const [visibleRepos, setVisibleRepos] = useState<string[]>([]);
-  const [tempVisibleRepos, setTempVisibleRepos] = useState<Set<string>>(new Set());
-  const [repos, setRepos] = useState<RepoInfo[]>([]);
-  const [selectedRepoName, setSelectedRepoName] = useState<string | null>(null);
-  const [showManageIndexes, setShowManageIndexes] = useState(false);
-  const [activeJob, setActiveJob] = useState<IndexingJob | null>(null);
-
-  // Selection states for batch indexing picker
-  const [selectedFolders, setSelectedFolders] = useState<Set<string>>(new Set());
-  const [indexingQueue, setIndexingQueue] = useState<string[]>([]);
-
-  const stats = graph ? graphStats(graph) : null;
-  const indexedRepos = useMemo(() => repos.filter((r) => r.hasGraph), [repos]);
-  const sidebarRepos = useMemo(() => {
-    const allowed = new Set(visibleRepos);
-    return indexedRepos.filter((r) => allowed.has(r.name));
-  }, [indexedRepos, visibleRepos]);
-  const hiddenRepos = useMemo(() => new Set<string>(), []);
-
-  // Fetch initial config & repositories list
-  const fetchConfig = async () => {
-    try {
-      const res = await fetch("/api/config");
-      if (res.ok) {
-        const data = await res.json();
-        setWorkspaceRoot(data.workspaceRoot ?? "");
-        setVisibleRepos(Array.isArray(data.visibleRepos) ? data.visibleRepos : []);
-      }
-    } catch (e) {
-      console.error("Failed to fetch config:", e);
-    }
-  };
-
-  const fetchRepos = async () => {
+  // ── Fetch repos ──────────────────────────────────────────────
+  const fetchRepos = useCallback(async () => {
     try {
       const res = await fetch("/api/repos");
       if (res.ok) {
@@ -100,45 +86,14 @@ export function App() {
     } catch (e) {
       console.error("Failed to fetch repos:", e);
     }
-  };
-
-  useEffect(() => {
-    void (async () => {
-      setLoading(true);
-      await fetchConfig();
-      await fetchRepos();
-
-      // Check if there is an active job running on startup
-      try {
-        const res = await fetch("/api/reindex/status");
-        if (res.ok) {
-          const data = await res.json();
-          if (data.status === "running") {
-            setActiveJob(data);
-          }
-        }
-      } catch {}
-
-      setLoading(false);
-    })();
   }, []);
 
-  // Synchronize temp workspace root state when workspace root changes
+  // Initial load
   useEffect(() => {
-    setTempWorkspaceRoot(workspaceRoot);
-  }, [workspaceRoot]);
+    void fetchRepos();
+  }, [fetchRepos]);
 
-  useEffect(() => {
-    setTempVisibleRepos(new Set(visibleRepos));
-  }, [visibleRepos]);
-
-  // Clear selections whenever workspace configuration or repos list changes
-  useEffect(() => {
-    setSelectedFolders(new Set());
-    setIndexingQueue([]);
-  }, [workspaceRoot, repos]);
-
-  // Select the first sidebar repository by default if nothing is selected
+  // ── Auto-select first sidebar repo ───────────────────────────
   useEffect(() => {
     if (!selectedRepoName && sidebarRepos.length > 0) {
       setSelectedRepoName(sidebarRepos[0]!.name);
@@ -153,7 +108,7 @@ export function App() {
     }
   }, [sidebarRepos, selectedRepoName]);
 
-  // Load selected repository graph
+  // ── Load graph (Web Worker for parsing) ──────────────────────
   const loadGraph = useCallback(async (repoName: string) => {
     setLoadingGraph(true);
     setLoadError(null);
@@ -164,13 +119,27 @@ export function App() {
         throw new Error(errData.error || `Failed to load graph for ${repoName}`);
       }
       const text = await res.text();
-      const parsed = parseGraphJson(text);
 
-      // Normalize nodes by assigning a repo tag if missing
-      parsed.nodes = parsed.nodes.map((node) => ({
-        ...node,
-        repo: node.repo || repoName,
-      }));
+      // Parse in a Web Worker to avoid blocking the main thread
+      const parsed = await new Promise<KnowledgeGraphJson>((resolve, reject) => {
+        const worker = new Worker(
+          new URL("./workers/graph-parser.worker.ts", import.meta.url),
+          { type: "module" }
+        );
+        worker.onmessage = (event) => {
+          worker.terminate();
+          if (event.data.type === "success") {
+            resolve(event.data.data);
+          } else {
+            reject(new Error(event.data.error));
+          }
+        };
+        worker.onerror = (err) => {
+          worker.terminate();
+          reject(new Error(err.message));
+        };
+        worker.postMessage({ text, repoName });
+      });
 
       setGraph(parsed);
       setSelectedNode(null);
@@ -182,7 +151,7 @@ export function App() {
     }
   }, []);
 
-  // Reload/Fetch graph whenever selectedRepoName changes
+  // Reload graph when selected repo changes
   useEffect(() => {
     if (selectedRepoName) {
       void loadGraph(selectedRepoName);
@@ -191,169 +160,7 @@ export function App() {
     }
   }, [selectedRepoName, loadGraph]);
 
-  // Polling index job status
-  useEffect(() => {
-    let intervalId: any;
-
-    const checkStatus = async () => {
-      try {
-        const res = await fetch("/api/reindex/status");
-        if (res.ok) {
-          const data: IndexingJob = await res.json();
-          if (data.status === "running") {
-            setActiveJob(data);
-          } else if (data.status === "success" || data.status === "error") {
-            setActiveJob(data);
-            // Refresh repo list to see new index metadata
-            void fetchRepos();
-            // If the completed job is for the current repo, reload its graph
-            if (data.status === "success" && data.repo === selectedRepoName) {
-              void loadGraph(data.repo);
-            }
-          } else {
-            setActiveJob(null);
-          }
-        }
-      } catch (e) {
-        console.error("Error fetching job status:", e);
-      }
-    };
-
-    if (activeJob && activeJob.status === "running") {
-      intervalId = setInterval(checkStatus, 2000);
-    }
-
-    return () => {
-      if (intervalId) clearInterval(intervalId);
-    };
-  }, [activeJob?.status, selectedRepoName, loadGraph]);
-
-  // Trigger indexing for a repository
-  const handleReindex = async (repoName: string, force = false) => {
-    try {
-      const res = await fetch("/api/reindex", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ repo: repoName, force }),
-      });
-      if (res.ok) {
-        setActiveJob({
-          repo: repoName,
-          status: "running",
-          startTime: new Date().toISOString(),
-        });
-      } else {
-        const errData = await res.json();
-        alert(errData.error || "Failed to start indexing");
-      }
-    } catch (err) {
-      console.error(err);
-      alert("Error starting indexing");
-    }
-  };
-
-  // Clear indexing job status panel
-  const handleClearJob = async () => {
-    try {
-      await fetch("/api/reindex/status", { method: "POST" });
-      setActiveJob(null);
-    } catch {}
-  };
-
-  const handleToggleFolder = (folderName: string) => {
-    setSelectedFolders((prev) => {
-      const next = new Set(prev);
-      if (next.has(folderName)) {
-        next.delete(folderName);
-      } else {
-        next.add(folderName);
-      }
-      return next;
-    });
-  };
-
-  const handleSelectAll = () => {
-    if (selectedFolders.size === repos.length) {
-      setSelectedFolders(new Set());
-    } else {
-      setSelectedFolders(new Set(repos.map((r) => r.name)));
-    }
-  };
-
-  const handleBuildSelected = () => {
-    const list = Array.from(selectedFolders);
-    if (list.length === 0) return;
-    setIndexingQueue(list);
-  };
-
-  // Batch indexing queue effect
-  useEffect(() => {
-    if (indexingQueue.length > 0 && (!activeJob || activeJob.status !== "running")) {
-      if (activeJob && (activeJob.status === "success" || activeJob.status === "error")) {
-        const nextQueue = indexingQueue.slice(1);
-        setIndexingQueue(nextQueue);
-        void handleClearJob();
-      } else {
-        const nextFolder = indexingQueue[0];
-        if (nextFolder) {
-          void handleReindex(nextFolder);
-        }
-      }
-    }
-  }, [indexingQueue, activeJob]);
-
-  const handleToggleSidebarRepo = (repoName: string) => {
-    setTempVisibleRepos((prev) => {
-      const next = new Set(prev);
-      if (next.has(repoName)) {
-        next.delete(repoName);
-      } else {
-        next.add(repoName);
-      }
-      return next;
-    });
-  };
-
-  const handleSaveVisibleRepos = async () => {
-    try {
-      const res = await fetch("/api/config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ visibleRepos: Array.from(tempVisibleRepos).sort() }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setVisibleRepos(Array.isArray(data.visibleRepos) ? data.visibleRepos : []);
-      }
-    } catch {
-      alert("Failed to save sidebar repositories");
-    }
-  };
-
-  const handleShowAllInSidebar = () => {
-    setTempVisibleRepos(new Set(indexedRepos.map((r) => r.name)));
-  };
-
-  // Save workspace root path
-  const handleSaveConfig = async () => {
-    try {
-      const res = await fetch("/api/config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ workspaceRoot: tempWorkspaceRoot }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setWorkspaceRoot(data.workspaceRoot);
-        setSelectedRepoName(null);
-        setGraph(null);
-        await fetchRepos();
-      }
-    } catch {
-      alert("Failed to save workspace root");
-    }
-  };
-
+  // ── Node selection helpers ───────────────────────────────────
   const handleSelectNeighbor = useCallback(
     (nodeId: string) => {
       const neighbor = graph?.nodes.find((n) => n.id === nodeId);
@@ -362,8 +169,22 @@ export function App() {
     [graph]
   );
 
+  // ── Manage modal callbacks ───────────────────────────────────
+  const handleSaveWorkspaceRoot = useCallback(
+    async (root: string) => {
+      const ok = await config.saveWorkspaceRoot(root);
+      if (ok) {
+        setSelectedRepoName(null);
+        setGraph(null);
+      }
+      return ok;
+    },
+    [config]
+  );
+
   return (
     <div className={`app${isDark ? " app--dark" : ""}`}>
+      {/* ── Header ──────────────────────────────────────────── */}
       <header className="app-header">
         <div className="app-header-left">
           <div className="brand-lockup">
@@ -376,32 +197,44 @@ export function App() {
             </div>
           </div>
           <div className="app-subtitle-row">
-            <span className="app-subtitle">Map codebases into local 2D and 3D dependency graphs.</span>
+            <span className="app-subtitle">
+              Map codebases into local 2D and 3D dependency graphs.
+            </span>
             {stats && selectedRepoName ? (
               <span className="app-stats">
                 <strong>{selectedRepoName}</strong>
                 <span>{stats.totalNodeCount.toLocaleString()} nodes</span>
                 <span>{stats.totalEdgeCount.toLocaleString()} edges</span>
-                {activeJob?.repo === selectedRepoName && activeJob?.status === "running" ? (
+                {indexingJob.activeJob?.repo === selectedRepoName &&
+                indexingJob.isIndexing ? (
                   <span className="badge badge--running">Indexing...</span>
                 ) : (
                   <button
                     type="button"
                     className="btn-inline-action"
-                    onClick={() => handleReindex(selectedRepoName)}
-                    disabled={activeJob?.status === "running"}
+                    onClick={() => indexingJob.startReindex(selectedRepoName)}
+                    disabled={indexingJob.isIndexing}
                   >
                     Reindex
                   </button>
                 )}
               </span>
             ) : (
-              selectedRepoName && <span className="app-stats">Loading graph for {selectedRepoName}...</span>
+              selectedRepoName && (
+                <span className="app-stats">
+                  Loading graph for {selectedRepoName}...
+                </span>
+              )
             )}
           </div>
         </div>
         <div className="app-header-right">
-          <a className="agentops-link" href="https://fremontagentops.com" target="_blank" rel="noreferrer">
+          <a
+            className="agentops-link"
+            href="https://fremontagentops.com"
+            target="_blank"
+            rel="noreferrer"
+          >
             AgentOps
           </a>
           <button
@@ -411,21 +244,31 @@ export function App() {
           >
             Manage Indexes
           </button>
-          <button type="button" className="btn-secondary" onClick={() => setIsDark((d) => !d)}>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => setIsDark((d) => !d)}
+          >
             {isDark ? "Light" : "Dark"}
           </button>
         </div>
       </header>
 
-      {loading && <p className="status-msg">Loading workspace...</p>}
-      {!loading && loadError && !graph && <p className="status-msg status-msg--error">{loadError}</p>}
+      {/* ── Loading / Error states ──────────────────────────── */}
+      {config.loading && <p className="status-msg">Loading workspace...</p>}
+      {!config.loading && loadError && !graph && (
+        <p className="status-msg status-msg--error">{loadError}</p>
+      )}
 
-      {!loading && (
+      {/* ── Main layout ─────────────────────────────────────── */}
+      {!config.loading && (
         <div className="main-layout">
           <aside className="sidebar">
             <div className="sidebar-section">
               <div className="sidebar-section-header">
-                <span className="sidebar-section-title">Repositories ({sidebarRepos.length})</span>
+                <span className="sidebar-section-title">
+                  Repositories ({sidebarRepos.length})
+                </span>
               </div>
 
               {sidebarRepos.length === 0 ? (
@@ -440,7 +283,9 @@ export function App() {
                     className="btn-secondary btn-sm w-full"
                     onClick={() => setShowManageIndexes(true)}
                   >
-                    {indexedRepos.length === 0 ? "Index Repositories" : "Choose Sidebar Repos"}
+                    {indexedRepos.length === 0
+                      ? "Index Repositories"
+                      : "Choose Sidebar Repos"}
                   </button>
                 </div>
               ) : (
@@ -455,7 +300,9 @@ export function App() {
                           onClick={() => setSelectedRepoName(repo.name)}
                         >
                           <div className="repo-list-item-main">
-                            <span className="repo-list-item-name">{repo.name}</span>
+                            <span className="repo-list-item-name">
+                              {repo.name}
+                            </span>
                             <span className="repo-list-item-stats">
                               {repo.nodeCount.toLocaleString()} nodes ·{" "}
                               {repo.edgeCount.toLocaleString()} edges
@@ -526,226 +373,52 @@ export function App() {
                   </>
                 }
               >
-                <GraphCanvas
-                  graph={graph}
-                  search={search}
-                  folderFilter={folderFilter}
-                  hiddenRepos={hiddenRepos}
-                  repos={sidebarRepos.map((r) => r.name)}
-                  selectedNodeId={selectedNode?.id ?? null}
-                  mode={mode}
-                  isDark={isDark}
-                  onSelectNode={setSelectedNode}
-                />
+                <ErrorBoundary>
+                  <Suspense
+                    fallback={
+                      <div className="graph-panel-status">
+                        <p>Loading graph renderer...</p>
+                      </div>
+                    }
+                  >
+                    <GraphCanvas
+                      graph={graph}
+                      search={search}
+                      folderFilter={folderFilter}
+                      hiddenRepos={hiddenRepos}
+                      repos={sidebarRepos.map((r) => r.name)}
+                      selectedNodeId={selectedNode?.id ?? null}
+                      mode={mode}
+                      isDark={isDark}
+                      onSelectNode={setSelectedNode}
+                    />
+                  </Suspense>
+                </ErrorBoundary>
               </FullscreenCanvasFrame>
             )}
           </main>
         </div>
       )}
 
+      {/* ── Manage Indexes Modal ────────────────────────────── */}
       {showManageIndexes && (
-        <div className="modal-overlay" onClick={() => {
-          if (activeJob?.status !== "running") setShowManageIndexes(false);
-        }}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2 className="modal-title">Manage Repositories</h2>
-              <button
-                type="button"
-                className="btn-close"
-                onClick={() => setShowManageIndexes(false)}
-                disabled={activeJob?.status === "running"}
-              >
-                &times;
-              </button>
-            </div>
-
-            <div className="modal-body">
-              <div className="config-group">
-                <label className="config-label">Workspace Root Path</label>
-                <div className="config-input-row">
-                  <input
-                    type="text"
-                    className="config-input"
-                    value={tempWorkspaceRoot}
-                    onChange={(e) => setTempWorkspaceRoot(e.target.value)}
-                    disabled={activeJob?.status === "running"}
-                  />
-                  <button
-                    type="button"
-                    className="btn-primary"
-                    onClick={handleSaveConfig}
-                    disabled={activeJob?.status === "running" || tempWorkspaceRoot === workspaceRoot}
-                  >
-                    Save
-                  </button>
-                </div>
-                <span className="config-hint">Repositories under this directory can be indexed and added to the sidebar.</span>
-              </div>
-
-              <div className="sidebar-config-section">
-                <div className="section-header-row">
-                  <h3 className="section-title">Sidebar Repositories</h3>
-                  <div className="batch-actions-row">
-                    <button
-                      type="button"
-                      className="btn-secondary btn-sm"
-                      onClick={handleShowAllInSidebar}
-                      disabled={activeJob?.status === "running"}
-                    >
-                      Show All Indexed
-                    </button>
-                    <button
-                      type="button"
-                      className="btn-primary btn-sm"
-                      onClick={handleSaveVisibleRepos}
-                      disabled={activeJob?.status === "running"}
-                    >
-                      Save Sidebar ({tempVisibleRepos.size})
-                    </button>
-                  </div>
-                </div>
-                <p className="config-hint sidebar-config-hint">
-                  Choose which indexed repositories appear in the left pane. Unselected repos stay hidden even if indexed.
-                </p>
-                {indexedRepos.length === 0 ? (
-                  <p className="no-repos-msg">Index at least one repository to add it to the sidebar.</p>
-                ) : (
-                  <ul className="sidebar-picker-list">
-                    {indexedRepos.map((repo) => (
-                      <li key={repo.name} className="sidebar-picker-item">
-                        <label className="checkbox-label-all">
-                          <input
-                            type="checkbox"
-                            checked={tempVisibleRepos.has(repo.name)}
-                            onChange={() => handleToggleSidebarRepo(repo.name)}
-                            disabled={activeJob?.status === "running"}
-                          />
-                          <span>{repo.name}</span>
-                          <span className="repo-meta-status">
-                            {repo.nodeCount.toLocaleString()} nodes · {repo.edgeCount.toLocaleString()} edges
-                          </span>
-                        </label>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-
-              {activeJob && (
-                <div className={`job-panel job-panel--${activeJob.status}`}>
-                  <div className="job-header">
-                    <strong>Indexing: {activeJob.repo}</strong>
-                    <span className="job-status-text">
-                      {activeJob.status === "running" ? "Running..." : activeJob.status === "success" ? "Completed" : "Failed"}
-                    </span>
-                  </div>
-                  {activeJob.error && (
-                    <pre className="job-error-log">{activeJob.error}</pre>
-                  )}
-                  {activeJob.status !== "running" && (
-                    <button
-                      type="button"
-                      className="btn-secondary btn-sm mt-2"
-                      onClick={handleClearJob}
-                    >
-                      Dismiss status
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {indexingQueue.length > 0 && (
-                <div className="queue-status-panel">
-                  <span className="queue-status-text">
-                    Queue active: indexing <strong>{indexingQueue[0]}</strong> ({indexingQueue.length} folders remaining)
-                  </span>
-                  <button
-                    type="button"
-                    className="btn-danger btn-sm"
-                    onClick={() => {
-                      setIndexingQueue([]);
-                    }}
-                  >
-                    Cancel Queue
-                  </button>
-                </div>
-              )}
-
-              <div className="detected-repos-section">
-                <div className="section-header-row">
-                  <h3 className="section-title">Detected Folders ({repos.length})</h3>
-                  <div className="batch-actions-row">
-                    <label className="checkbox-label-all">
-                      <input
-                        type="checkbox"
-                        checked={repos.length > 0 && selectedFolders.size === repos.length}
-                        onChange={handleSelectAll}
-                        disabled={activeJob?.status === "running" || indexingQueue.length > 0}
-                      />
-                      <span>Select All</span>
-                    </label>
-                    <button
-                      type="button"
-                      className="btn-primary btn-sm"
-                      onClick={handleBuildSelected}
-                      disabled={selectedFolders.size === 0 || activeJob?.status === "running" || indexingQueue.length > 0}
-                    >
-                      Build Selected ({selectedFolders.size})
-                    </button>
-                  </div>
-                </div>
-                <ul className="detected-repos-list">
-                  {repos.map((repo) => {
-                    const isIndexingCurrent = activeJob?.repo === repo.name && activeJob.status === "running";
-                    const isChecked = selectedFolders.has(repo.name);
-                    const isQueued = indexingQueue.includes(repo.name);
-                    return (
-                      <li key={repo.name} className={`detected-repo-item ${isQueued ? "queued" : ""}`}>
-                        <div className="repo-checkbox-and-meta">
-                          <input
-                            type="checkbox"
-                            checked={isChecked}
-                            onChange={() => handleToggleFolder(repo.name)}
-                            disabled={activeJob?.status === "running" || indexingQueue.length > 0}
-                            className="repo-checkbox"
-                          />
-                          <div className="repo-meta">
-                            <div className="repo-name-and-badge">
-                              <span className="repo-meta-name">{repo.name}</span>
-                              {repo.isGit ? (
-                                <span className="badge badge--git">Git</span>
-                              ) : (
-                                <span className="badge badge--folder">Folder</span>
-                              )}
-                            </div>
-                            <span className="repo-meta-status">
-                              {repo.hasGraph ? (
-                                <span className="badge badge--indexed">
-                                  Indexed ({repo.nodeCount} nodes · {repo.edgeCount} edges)
-                                </span>
-                              ) : (
-                                <span className="badge badge--not-indexed">Not Indexed</span>
-                              )}
-                            </span>
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          className="btn-secondary btn-sm"
-                          onClick={() => handleReindex(repo.name)}
-                          disabled={activeJob?.status === "running" || indexingQueue.length > 0}
-                        >
-                          {isIndexingCurrent ? "Indexing..." : isQueued ? "Queued" : repo.hasGraph ? "Rebuild Index" : "Build Index"}
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            </div>
-          </div>
-        </div>
+        <ManageIndexesModal
+          repos={repos}
+          indexedRepos={indexedRepos}
+          workspaceRoot={config.workspaceRoot}
+          visibleRepos={config.visibleRepos}
+          activeJob={indexingJob.activeJob}
+          indexingQueue={indexingJob.indexingQueue}
+          isIndexing={indexingJob.isIndexing}
+          onSaveWorkspaceRoot={handleSaveWorkspaceRoot}
+          onSaveVisibleRepos={config.saveVisibleRepos}
+          onReindex={indexingJob.startReindex}
+          onBuildSelected={indexingJob.startBatchReindex}
+          onClearJob={indexingJob.clearJob}
+          onCancelQueue={indexingJob.cancelQueue}
+          onClose={() => setShowManageIndexes(false)}
+          onRefreshRepos={fetchRepos}
+        />
       )}
     </div>
   );
