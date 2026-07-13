@@ -439,7 +439,7 @@ export function GraphCanvas({
           <ForceGraph2D
             ref={fg2dRef as RefObject<never>}
             {...graphProps}
-            backgroundColor="transparent"
+            backgroundColor={theme.surfaceSecondary}
             nodeVisibility={nodeVisibility}
             linkVisibility={linkVisibility}
             linkLineDash={linkLineDash}

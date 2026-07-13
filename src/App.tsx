@@ -41,9 +41,18 @@ export function App() {
   const [folderFilter, setFolderFilter] = useState("");
   const [selectedNode, setSelectedNode] = useState<KnowledgeGraphNode | null>(null);
   const [mode, setMode] = useState<GraphRenderMode>("2d");
-  const [isDark, setIsDark] = useState(() =>
-    window.matchMedia("(prefers-color-scheme: dark)").matches
-  );
+  const [isDark, setIsDark] = useState(() => {
+    const themeParam = new URLSearchParams(window.location.search).get("theme");
+    if (themeParam === "dark") return true;
+    if (themeParam === "light") return false;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches;
+  });
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("theme", isDark ? "dark" : "light");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  }, [isDark]);
 
   // Workspace configuration & Repository states
   const [workspaceRoot, setWorkspaceRoot] = useState("");
@@ -357,29 +366,44 @@ export function App() {
     <div className={`app${isDark ? " app--dark" : ""}`}>
       <header className="app-header">
         <div className="app-header-left">
-          <h1 className="app-title">Knowledge Graph Viewer</h1>
-          {stats && selectedRepoName ? (
-            <span className="app-stats">
-              Viewing <strong>{selectedRepoName}</strong>: {stats.totalNodeCount.toLocaleString()} nodes ·{" "}
-              {stats.totalEdgeCount.toLocaleString()} edges
-              {activeJob?.repo === selectedRepoName && activeJob?.status === "running" ? (
-                <span className="badge badge--running">Indexing...</span>
-              ) : (
-                <button
-                  type="button"
-                  className="btn-inline-action"
-                  onClick={() => handleReindex(selectedRepoName)}
-                  disabled={activeJob?.status === "running"}
-                >
-                  (Reindex)
-                </button>
-              )}
-            </span>
-          ) : (
-            selectedRepoName && <span className="app-stats">Loading graph for {selectedRepoName}...</span>
-          )}
+          <div className="brand-lockup">
+            <div className="brand-mark" aria-hidden="true">
+              <span />
+            </div>
+            <div className="brand-copy">
+              <span className="app-eyebrow">Fremont AgentOps Lab</span>
+              <h1 className="app-title">Knowledge Graph Viewer</h1>
+            </div>
+          </div>
+          <div className="app-subtitle-row">
+            <span className="app-subtitle">Map codebases into local 2D and 3D dependency graphs.</span>
+            {stats && selectedRepoName ? (
+              <span className="app-stats">
+                <strong>{selectedRepoName}</strong>
+                <span>{stats.totalNodeCount.toLocaleString()} nodes</span>
+                <span>{stats.totalEdgeCount.toLocaleString()} edges</span>
+                {activeJob?.repo === selectedRepoName && activeJob?.status === "running" ? (
+                  <span className="badge badge--running">Indexing...</span>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn-inline-action"
+                    onClick={() => handleReindex(selectedRepoName)}
+                    disabled={activeJob?.status === "running"}
+                  >
+                    Reindex
+                  </button>
+                )}
+              </span>
+            ) : (
+              selectedRepoName && <span className="app-stats">Loading graph for {selectedRepoName}...</span>
+            )}
+          </div>
         </div>
         <div className="app-header-right">
+          <a className="agentops-link" href="https://fremontagentops.com" target="_blank" rel="noreferrer">
+            AgentOps
+          </a>
           <button
             type="button"
             className="btn-secondary"
@@ -468,6 +492,7 @@ export function App() {
             {graph && (
               <FullscreenCanvasFrame
                 title={selectedRepoName || "Knowledge Graph"}
+                isDark={isDark}
                 toolbar={
                   <>
                     <input

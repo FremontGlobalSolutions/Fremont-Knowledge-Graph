@@ -5,9 +5,10 @@ type Props = {
   title: string;
   toolbar?: ReactNode;
   children: ReactNode;
+  isDark?: boolean;
 };
 
-export function FullscreenCanvasFrame({ title, toolbar, children }: Props) {
+export function FullscreenCanvasFrame({ title, toolbar, children, isDark = false }: Props) {
   const [fullscreen, setFullscreen] = useState(false);
 
   useEffect(() => {
@@ -32,7 +33,7 @@ export function FullscreenCanvasFrame({ title, toolbar, children }: Props) {
   const toggleBtn = (
     <button
       type="button"
-      className="btn-secondary"
+      className="btn-secondary btn-fullscreen"
       onClick={() => setFullscreen((f) => !f)}
       title={fullscreen ? "Exit fullscreen (Esc)" : "Enter fullscreen"}
     >
@@ -58,7 +59,7 @@ export function FullscreenCanvasFrame({ title, toolbar, children }: Props) {
 
   if (fullscreen) {
     return createPortal(
-      <div className="fullscreen-viewport">
+      <div className={`fullscreen-viewport${isDark ? " fullscreen-viewport--dark" : ""}`}>
         <div className="fullscreen-header">
           <h2 className="fullscreen-title">{title}</h2>
           {toggleBtn}
