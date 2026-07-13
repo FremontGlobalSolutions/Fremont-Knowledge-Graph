@@ -1,7 +1,6 @@
 import type { Object3D } from "three";
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import ForceGraph2D from "react-force-graph-2d";
-import ForceGraph3D from "react-force-graph-3d";
 import { useDebouncedValue } from "./useDebouncedValue";
 import {
   buildForceGraphData,
@@ -14,8 +13,11 @@ import {
   type KnowledgeGraphFilterOptions,
 } from "./graph-data";
 import { readGraphTheme, repoColor, type GraphTheme } from "./graph-theme";
-import { createNodeLabelSprite } from "./graph-3d-label";
 import type { GraphRenderMode, KnowledgeGraphJson, KnowledgeGraphNode } from "./types";
+
+// ── Lazy-load 3D renderer ─────────────────────────────────────────
+// three.js (~1.8 MB) is only loaded when the user switches to 3D mode.
+const ForceGraph3D = lazy(() => import("react-force-graph-3d"));
 
 type Props = {
   graph: KnowledgeGraphJson;
@@ -182,9 +184,7 @@ export function GraphCanvas({
   const [dimensions, setDimensions] = useState({ width: 800, height: 520 });
   const [highlightIds, setHighlightIds] = useState<Set<string>>(new Set());
   const [labelSpritesReady, setLabelSpritesReady] = useState(mode !== "3d");
-  const createLabelSpriteRef = useRef<((label: string, color: string) => Object3D | undefined) | null>(
-    mode === "3d" ? createNodeLabelSprite : null
-  );
+  const createLabelSpriteRef = useRef<((label: string, color: string) => Object3D | undefined) | null>(null);
 
   const theme = useMemo(() => readGraphTheme(isDark), [isDark]);
   const debouncedSearch = useDebouncedValue(search, 200);
@@ -209,14 +209,18 @@ export function GraphCanvas({
     onSelectNodeRef.current = onSelectNode;
   }, [onSelectNode]);
 
+  // Lazy-load 3D label sprite creator only when 3D mode is active
   useEffect(() => {
     if (mode !== "3d") {
       createLabelSpriteRef.current = null;
       setLabelSpritesReady(false);
       return;
     }
-    createLabelSpriteRef.current = createNodeLabelSprite;
-    setLabelSpritesReady(true);
+    // Dynamic import — only loads three.js code when needed
+    void import("./graph-3d-label").then((mod) => {
+      createLabelSpriteRef.current = mod.createNodeLabelSprite;
+      setLabelSpritesReady(true);
+    });
   }, [mode]);
 
   useEffect(() => {
@@ -325,43 +329,37 @@ export function GraphCanvas({
 
   const linkColor = useCallback(
     (link: ForceGraphLink) => {
-      const typedLink = link as ForceGraphLink;
-      if (!isForceGraphLinkVisible(typedLink, visibleNodeIds)) return theme.surfaceSecondary;
+      if (!isForceGraphLinkVisible(link, visibleNodeIds)) return theme.surfaceSecondary;
       const sourceId = runtimeLinkEndpointId(link.source);
       const targetId = runtimeLinkEndpointId(link.target);
       if (highlightIds.has(sourceId) && highlightIds.has(targetId)) return theme.warning;
-      if (typedLink.crossRepo) return theme.crossRepo;
+      if (link.crossRepo) return theme.crossRepo;
       return theme.textMuted;
     },
     [theme, visibleNodeIds, highlightIds]
   );
 
   const linkVisibility = useCallback(
-    (link: ForceGraphLink) => isForceGraphLinkVisible(link as ForceGraphLink, visibleNodeIds),
+    (link: ForceGraphLink) => isForceGraphLinkVisible(link, visibleNodeIds),
     [visibleNodeIds]
   );
 
   const linkWidth = useCallback(
     (link: ForceGraphLink) => {
-      if (!isForceGraphLinkVisible(link as ForceGraphLink, visibleNodeIds)) return 0;
+      if (!isForceGraphLinkVisible(link, visibleNodeIds)) return 0;
       const sourceId = runtimeLinkEndpointId(link.source);
       const targetId = runtimeLinkEndpointId(link.target);
       const highlighted = highlightIds.has(sourceId) && highlightIds.has(targetId);
-      const typed = link as ForceGraphLink;
-      if (typed.crossRepo) return highlighted ? 3.5 : 2.2;
+      if (link.crossRepo) return highlighted ? 3.5 : 2.2;
       return highlighted ? 2.5 : 1;
     },
     [visibleNodeIds, highlightIds]
   );
 
-  const linkLineDash = useCallback(
-    (link: ForceGraphLink) => {
-      const typed = link as ForceGraphLink;
-      if (!typed.crossRepo) return null;
-      return [6, 3] as [number, number];
-    },
-    []
-  );
+  const linkLineDash = useCallback((link: ForceGraphLink) => {
+    if (!link.crossRepo) return null;
+    return [6, 3] as [number, number];
+  }, []);
 
   const paintNodeLabel = useCallback(
     (node: RuntimeGraphNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
@@ -399,22 +397,24 @@ export function GraphCanvas({
     [labelSpritesReady, theme.textPrimary, visibleNodeIds]
   );
 
+  // Shared props for both 2D and 3D renderers.
+  // Reduced warmup/cooldown ticks for faster initial paint.
   const graphProps = {
     graphData,
     width: dimensions.width,
     height: dimensions.height,
-    warmupTicks: 80,
-    cooldownTicks: 60,
-    cooldownTime: 2500,
-    d3AlphaDecay: 0.03,
+    warmupTicks: 20,
+    cooldownTicks: 40,
+    cooldownTime: 2000,
+    d3AlphaDecay: 0.04,
     d3VelocityDecay: 0.35,
     enableNodeDrag: true,
     nodeLabel: (node: RuntimeGraphNode) => node.label ?? String(node.id ?? ""),
     nodeRelSize: 6,
-    nodeColor,
-    linkColor,
-    linkWidth,
-    onNodeClick: handleNodeClick,
+    nodeColor: nodeColor as never,
+    linkColor: linkColor as never,
+    linkWidth: linkWidth as never,
+    onNodeClick: handleNodeClick as never,
     onBackgroundClick: handleBackgroundClick,
     onEngineStop: handleEngineStop,
   };
@@ -423,18 +423,26 @@ export function GraphCanvas({
     <div className="graph-canvas-wrap">
       <div ref={containerRef} className="graph-canvas">
         {mode === "3d" ? (
-          <ForceGraph3D
-            ref={fg3dRef as RefObject<never>}
-            {...graphProps}
-            backgroundColor={theme.surfaceSecondary}
-            showNavInfo={false}
-            nodeThreeObjectExtend={true}
-            nodeThreeObject={nodeThreeObject as never}
-            nodeVisibility={nodeVisibility}
-            nodeVal={(node: RuntimeGraphNode) =>
-              isNodeVisible(node, visibleNodeIds) ? 6 : 0.5
+          <Suspense
+            fallback={
+              <div className="graph-panel-status">
+                <p>Loading 3D renderer...</p>
+              </div>
             }
-          />
+          >
+            <ForceGraph3D
+              ref={fg3dRef as RefObject<never>}
+              {...graphProps}
+              backgroundColor={theme.surfaceSecondary}
+              showNavInfo={false}
+              nodeThreeObjectExtend={true}
+              nodeThreeObject={nodeThreeObject as never}
+              nodeVisibility={nodeVisibility}
+              nodeVal={(node: RuntimeGraphNode) =>
+                isNodeVisible(node, visibleNodeIds) ? 6 : 0.5
+              }
+            />
+          </Suspense>
         ) : (
           <ForceGraph2D
             ref={fg2dRef as RefObject<never>}
