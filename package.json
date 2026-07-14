@@ -1,13 +1,19 @@
 {
-  "name": "knowledge-graph-viewer",
+  "name": "@fremontglobalsolutions/knowledge-graph-viewer",
   "version": "0.1.0",
-  "private": true,
   "description": "Local 2D/3D viewer for Graphify knowledge graphs",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/FremontGlobalSolutions/Fremont-Knowledge-Graph.git"
   },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "type": "module",
+  "sideEffects": [
+    "**/*.css"
+  ],
   "main": "./dist/index.umd.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -22,7 +28,6 @@
   "files": [
     "dist"
   ],
-  "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
