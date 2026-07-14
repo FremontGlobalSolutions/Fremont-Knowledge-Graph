@@ -35,7 +35,7 @@ export default defineConfig(({ command, mode }) => {
         entry: "src/index.ts",
         name: "FremontKnowledgeGraphViewer",
         formats: ["es", "umd"],
-        fileName: (format) => `index.${format === "es" ? "js" : "umd.cjs"}`,\\
+        fileName: (format) => `index.${format === "es" ? "js" : "umd.cjs"}`,
         cssFileName: "style",
       },
       rollupOptions: {
