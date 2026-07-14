@@ -55,7 +55,7 @@ Only repos listed in `visibleRepos` show in the sidebar — indexed repos you om
 
 - Node.js 18+
 - Graphify for indexing (`graphify update` or `npx @sentropic/graphify update`)
-- Windows: bundled reindex script uses PowerShell (`scripts/update-graphify-graphs.ps1`)
+- Windows/macOS/Linux: bundled reindex script uses Node.js (`scripts/update-graphify-graphs.mjs`)
 
 ## Production build
 
