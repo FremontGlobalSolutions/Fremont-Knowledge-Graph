@@ -337,30 +337,20 @@ export function apiPlugin(): Plugin {
           const scriptPath = path.join(
             process.cwd(),
             "scripts",
-            "update-graphify-graphs.ps1"
+            "update-graphify-graphs.mjs"
           );
-          const psArgs = [
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            scriptPath,
-            "-Workspace",
-            root,
-            "-Repo",
-            repoPath,
-          ];
+          const argsList = [scriptPath, repoPath];
 
           if (body.force) {
-            psArgs.push("-Force");
+            argsList.push("--force");
           }
 
           console.log(
-            `[Reindex] Spawning powershell.exe for ${repoName} in ${root}`
+            `[Reindex] Spawning node for ${repoName} in ${root}`
           );
-          const child = spawn("powershell.exe", psArgs, {
+          const child = spawn("node", argsList, {
             cwd: process.cwd(),
+            shell: true,
           });
 
           let output = "";
@@ -373,7 +363,7 @@ export function apiPlugin(): Plugin {
 
           child.on("close", (code: number | null) => {
             console.log(
-              `[Reindex] PowerShell exited with code ${code} for ${repoName}`
+              `[Reindex] Node script exited with code ${code} for ${repoName}`
             );
             if (code === 0) {
               activeIndexingProcess!.status = "success";
