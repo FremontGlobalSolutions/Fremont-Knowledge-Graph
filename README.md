@@ -43,7 +43,7 @@ Only repos listed in `visibleRepos` show in the sidebar — indexed repos you om
 
 ## Library Usage
 
-This package is compiled as a reusable React component library. To consume the graph viewer and adapter in another application (e.g., `fremont-agentops-ui`):
+This package is compiled as a reusable React component library. To consume the graph viewer and adapter in another application (e.g., your custom React application):
 
 ### 1. Install Peer Dependencies
 Ensure you have the required peer dependencies installed in your project:
