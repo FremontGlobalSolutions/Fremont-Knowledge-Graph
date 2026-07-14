@@ -8,6 +8,20 @@
     "type": "git",
     "url": "https://github.com/FremontGlobalSolutions/Fremont-Knowledge-Graph.git"
   },
+  "main": "./dist/index.umd.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.umd.cjs"
+    },
+    "./dist/style.css": "./dist/style.css"
+  },
+  "files": [
+    "dist"
+  ],
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -15,22 +29,27 @@
     "preview": "vite preview",
     "docs:gif": "node scripts/make-readme-gif.mjs"
   },
-  "dependencies": {
+  "peerDependencies": {
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "dependencies": {
     "react-force-graph-2d": "1.29.1",
     "react-force-graph-3d": "1.29.1",
     "three": "0.184.0"
   },
   "devDependencies": {
-    "@types/node": "^26.1.1",
+    "@types/node": "^22.13.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@types/three": "^0.184.0",
     "@vitejs/plugin-react": "^4.3.4",
     "gifenc": "^1.0.3",
     "pngjs": "^7.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
     "typescript": "^5.7.0",
-    "vite": "^6.0.0"
+    "vite": "^6.0.0",
+    "vite-plugin-dts": "^4.5.0"
   }
 }

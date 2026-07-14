@@ -1,17 +1,9 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
-import { NodeInspector } from "./NodeInspector";
-import { FullscreenCanvasFrame } from "./FullscreenCanvasFrame";
-import { ErrorBoundary } from "./ErrorBoundary";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { KnowledgeGraphViewer, graphifyAdapter } from "./index";
 import { ManageIndexesModal } from "./ManageIndexesModal";
 import { useWorkspaceConfig } from "./hooks/useWorkspaceConfig";
 import { useIndexingJob } from "./hooks/useIndexingJob";
-import type { GraphRenderMode, KnowledgeGraphJson, KnowledgeGraphNode, RepoInfo } from "./types";
-
-// Lazy-load GraphCanvas — it pulls in react-force-graph-2d (and
-// optionally 3D/three.js), which are the heaviest dependencies.
-const GraphCanvas = lazy(() =>
-  import("./GraphCanvas").then((m) => ({ default: m.GraphCanvas }))
-);
+import type { KnowledgeGraphJson, RepoInfo } from "./types";
 
 function graphStats(graph: KnowledgeGraphJson) {
   const metadata = graph.metadata ?? {};
@@ -27,10 +19,6 @@ export function App() {
   const [graph, setGraph] = useState<KnowledgeGraphJson | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadingGraph, setLoadingGraph] = useState(false);
-  const [search, setSearch] = useState("");
-  const [folderFilter, setFolderFilter] = useState("");
-  const [selectedNode, setSelectedNode] = useState<KnowledgeGraphNode | null>(null);
-  const [mode, setMode] = useState<GraphRenderMode>("2d");
   const [isDark, setIsDark] = useState(() => {
     const themeParam = new URLSearchParams(window.location.search).get("theme");
     if (themeParam === "dark") return true;
@@ -48,7 +36,6 @@ export function App() {
   const indexingJob = useIndexingJob(
     useCallback(
       (repoName: string) => {
-        // Refresh repo list on successful index
         void fetchRepos();
         if (repoName === selectedRepoName) {
           void loadGraph(repoName);
@@ -66,7 +53,6 @@ export function App() {
     const allowed = new Set(config.visibleRepos);
     return indexedRepos.filter((r) => allowed.has(r.name));
   }, [indexedRepos, config.visibleRepos]);
-  const hiddenRepos = useMemo(() => new Set<string>(), []);
 
   // ── Theme URL sync ───────────────────────────────────────────
   useEffect(() => {
@@ -108,7 +94,7 @@ export function App() {
     }
   }, [sidebarRepos, selectedRepoName]);
 
-  // ── Load graph (Web Worker for parsing) ──────────────────────
+  // ── Load graph ───────────────────────────────────────────────
   const loadGraph = useCallback(async (repoName: string) => {
     setLoadingGraph(true);
     setLoadError(null);
@@ -120,29 +106,10 @@ export function App() {
       }
       const text = await res.text();
 
-      // Parse in a Web Worker to avoid blocking the main thread
-      const parsed = await new Promise<KnowledgeGraphJson>((resolve, reject) => {
-        const worker = new Worker(
-          new URL("./workers/graph-parser.worker.ts", import.meta.url),
-          { type: "module" }
-        );
-        worker.onmessage = (event) => {
-          worker.terminate();
-          if (event.data.type === "success") {
-            resolve(event.data.data);
-          } else {
-            reject(new Error(event.data.error));
-          }
-        };
-        worker.onerror = (err) => {
-          worker.terminate();
-          reject(new Error(err.message));
-        };
-        worker.postMessage({ text, repoName });
-      });
+      // Use the exported graphifyAdapter to convert raw payload to canonical JSON contract
+      const parsed = graphifyAdapter(text);
 
       setGraph(parsed);
-      setSelectedNode(null);
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "Failed to load graph");
       setGraph(null);
@@ -159,15 +126,6 @@ export function App() {
       setGraph(null);
     }
   }, [selectedRepoName, loadGraph]);
-
-  // ── Node selection helpers ───────────────────────────────────
-  const handleSelectNeighbor = useCallback(
-    (nodeId: string) => {
-      const neighbor = graph?.nodes.find((n) => n.id === nodeId);
-      if (neighbor) setSelectedNode(neighbor);
-    },
-    [graph]
-  );
 
   // ── Manage modal callbacks ───────────────────────────────────
   const handleSaveWorkspaceRoot = useCallback(
@@ -262,8 +220,8 @@ export function App() {
 
       {/* ── Main layout ─────────────────────────────────────── */}
       {!config.loading && (
-        <div className="main-layout">
-          <aside className="sidebar">
+        <div className="main-layout" style={{ display: "flex", flex: 1, minHeight: 0 }}>
+          <aside className="sidebar" style={{ width: "280px", flexShrink: 0, overflowY: "auto" }}>
             <div className="sidebar-section">
               <div className="sidebar-section-header">
                 <span className="sidebar-section-title">
@@ -315,17 +273,9 @@ export function App() {
                 </ul>
               )}
             </div>
-
-            {selectedNode && graph && (
-              <NodeInspector
-                node={selectedNode}
-                graph={graph}
-                onSelectNeighbor={handleSelectNeighbor}
-              />
-            )}
           </aside>
 
-          <main className="graph-panel">
+          <div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>
             {loadingGraph && (
               <div className="graph-panel-status">
                 <p>Loading graph...</p>
@@ -337,66 +287,13 @@ export function App() {
               </div>
             )}
             {graph && (
-              <FullscreenCanvasFrame
-                title={selectedRepoName || "Knowledge Graph"}
+              <KnowledgeGraphViewer
+                graph={graph}
                 isDark={isDark}
-                toolbar={
-                  <>
-                    <input
-                      value={search}
-                      onChange={(e) => setSearch(e.target.value)}
-                      placeholder="Filter nodes..."
-                      className="toolbar-input"
-                    />
-                    <input
-                      value={folderFilter}
-                      onChange={(e) => setFolderFilter(e.target.value)}
-                      placeholder="Folder filter (e.g. src/)"
-                      className="toolbar-input"
-                    />
-                    <div className="mode-toggle">
-                      <button
-                        type="button"
-                        className={`mode-btn${mode === "2d" ? " mode-btn--active" : ""}`}
-                        onClick={() => setMode("2d")}
-                      >
-                        2D
-                      </button>
-                      <button
-                        type="button"
-                        className={`mode-btn${mode === "3d" ? " mode-btn--active" : ""}`}
-                        onClick={() => setMode("3d")}
-                      >
-                        3D
-                      </button>
-                    </div>
-                  </>
-                }
-              >
-                <ErrorBoundary>
-                  <Suspense
-                    fallback={
-                      <div className="graph-panel-status">
-                        <p>Loading graph renderer...</p>
-                      </div>
-                    }
-                  >
-                    <GraphCanvas
-                      graph={graph}
-                      search={search}
-                      folderFilter={folderFilter}
-                      hiddenRepos={hiddenRepos}
-                      repos={sidebarRepos.map((r) => r.name)}
-                      selectedNodeId={selectedNode?.id ?? null}
-                      mode={mode}
-                      isDark={isDark}
-                      onSelectNode={setSelectedNode}
-                    />
-                  </Suspense>
-                </ErrorBoundary>
-              </FullscreenCanvasFrame>
+                title={selectedRepoName || "Knowledge Graph"}
+              />
             )}
-          </main>
+          </div>
         </div>
       )}
 

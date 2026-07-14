@@ -41,6 +41,46 @@ Copy `.viewer-config.example.json` to `.viewer-config.json` to persist workspace
 
 Only repos listed in `visibleRepos` show in the sidebar — indexed repos you omit stay hidden.
 
+## Library Usage
+
+This package is compiled as a reusable React component library. To consume the graph viewer and adapter in another application (e.g., `fremont-agentops-ui`):
+
+### 1. Install Peer Dependencies
+Ensure you have the required peer dependencies installed in your project:
+```bash
+npm install react react-dom
+```
+
+### 2. Import and Render
+Import the CSS styles and render the `KnowledgeGraphViewer` component. You can use the exported `graphifyAdapter` to normalize raw Graphify JSON text:
+
+```typescript
+import { KnowledgeGraphViewer, graphifyAdapter } from "@fremontglobalsolutions/knowledge-graph-viewer";
+import "@fremontglobalsolutions/knowledge-graph-viewer/dist/style.css";
+
+function App() {
+  const rawJsonText = getGraphData(); // Fetch or load Graphify JSON
+  const graphData = graphifyAdapter(rawJsonText);
+
+  return (
+    <div style={{ width: "100vw", height: "100vh" }}>
+      <KnowledgeGraphViewer
+        graph={graphData}
+        isDark={true}
+        title="My Codebase Map"
+      />
+    </div>
+  );
+}
+```
+
+### Library Exports
+The package exposes the following entry points:
+- `KnowledgeGraphViewer`: The self-contained React viewer layout (toolbar, sidebar inspector, and canvas).
+- `graphifyAdapter`: Normalization utility for converting raw Graphify JSON to the canonical data contract.
+- `GraphCanvas`: The isolated d3/ForceGraph canvas rendering component.
+- `NodeInspector`: The sidebar details inspector component.
+
 ## Features
 
 - **2D and 3D** force-graph rendering
