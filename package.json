@@ -1,6 +1,6 @@
 {
   "name": "@fremontglobalsolutions/knowledge-graph-viewer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local 2D/3D viewer for Graphify knowledge graphs",
   "license": "MIT",
   "repository": {
